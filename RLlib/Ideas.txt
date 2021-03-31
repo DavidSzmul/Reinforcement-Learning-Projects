@@ -1,0 +1,26 @@
+Idée Majeur:
+Générer un self-reinforcement learning ayant le but inverse des réseaux sociaux
+==> Explorer au maximum les centres d'intérêts, booster l'exploration, la réflexion et la créativité, privilegier le débat avec toute opinion sans filtre.
+SANS Fake Account, Fake News, seulement la pensée de véritable personnes.
+Un moyen de rassembler la pensée commune pour arriver à un but --> https://www.youtube.com/watch?v=ux6pbOCFueg ou Pokemon-Twitch
+Apprendre ou réapprendre les personnes à explorer, prendre du recul sur les choses, diminuer les extremismes 
+==> Manipulation inverse des réseaux sociaux 
+Faire comprendre que la censure et la vision uni-latéral ne fait qu'empirer les choses. Le besoin de laisser libre l'expression à n'importe qui
+et encourager la MAJORITE SILENCIEUSE à s' inclure dans le dialogue pour contrer les extrêmes.
+
+Un réseau inter-social, un WikiLeaks du réseau social cherchant à renverser la dérive des réseaux sociaux.
+Utilisation des derniers modules de communication --> Discord, Jeux Mulit,...
+
+Reinforcement Learning:
+Evolutianory Algorithm in deep RL
+PPO 
+HER 
+Auto-Reinforced Learning (no reward function)
+AlphaGo-Zero : https://web.stanford.edu/~surag/posts/alphazero.html
+
+Supervised Learning:
+Few Shot Learning Reptile
+Distiller -> Transfer learning TEACHER to STUDENT
+
+(Optional):
+Box Detection

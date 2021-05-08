@@ -1,66 +1,42 @@
+import numpy
 import random
-from collections import deque
-import numpy as np
-
-class Memory:
-    def __init__(self, max_size):
-        self.buffer = deque(maxlen=max_size)
-    
-    def add(self, experience):
-        self.buffer.append(experience)
-
-    def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        return batch
-
-    def __len__(self):
-        return len(self.buffer)
 
 class PER:  # stored as ( s, a, r, s_ ) in SumTree
     e = 0.01
     a = 0.6
-    size = 0
+    def __init__(self, capacity):
+        self.tree = SumTree(capacity)
 
-    def __init__(self, max_size):
-        self.max_size = max_size
-        self.tree = SumTree(self.max_size)
-        
     def _getPriority(self, error):
         return (error + self.e) ** self.a
 
-    def add(self, experience, error):
+    def add(self, error, sample):
         p = self._getPriority(error)
-        self.tree.add(p, experience)
-        self.size=min(self.size+1, self.max_size)
+        self.tree.add(p, sample)
 
-    def sample(self, batch_size):
+    def sample(self, n):
         batch = []
-        idxs = []
-        segment = self.tree.total() / batch_size
+        segment = self.tree.total() / n
 
-        for i in range(batch_size):
+        for i in range(n):
             a = segment * i
             b = segment * (i + 1)
             s = random.uniform(a, b)
             (idx, _, data) = self.tree.get(s)
-            batch.append(data)
-            idxs.append(idx)
-        return batch, idxs
+            batch.append((idx, data))
+        return batch
 
     def update(self, idx, error):
         p = self._getPriority(error)
         self.tree.update(idx, p)
-
-    def __len__(self):
-        return self.size
 
 class SumTree:
     write = 0
 
     def __init__(self, capacity):
         self.capacity = capacity
-        self.tree = np.zeros( 2*capacity - 1 )
-        self.data = np.zeros( capacity, dtype=object )
+        self.tree = numpy.zeros( 2*capacity - 1 )
+        self.data = numpy.zeros( capacity, dtype=object )
 
     def _propagate(self, idx, change):
         parent = (idx - 1) // 2

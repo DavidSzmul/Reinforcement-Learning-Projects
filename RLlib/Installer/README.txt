@@ -42,4 +42,5 @@ https://docs.python-guide.org/writing/structure/
 https://blog.finxter.com/python-how-to-import-modules-from-another-folder/
 
 * Add Project path in virtualenv
-Add project in PYTHONPATH (manually for the moment)
+Create PYTHONPATH in environment variables
+Add project in PYTHONPATH (manually for the moment, can create .bat for each project)

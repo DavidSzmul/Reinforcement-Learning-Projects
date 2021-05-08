@@ -1,38 +1,47 @@
 import numpy as np
 from collections import deque
 import random
-from tqdm import tqdm
 import tensorflow as tf
 import keras
-from keras.models import Sequential, load_model
+from keras.models import Sequential, load_model, save_model
 from keras.layers import Dense, BatchNormalization
 from keras.optimizers import Adam
-
+from library.Memory import Memory, PER
+from library.Environment import Environment
+from library.Session import Session
 
 class DQN_Agent:
     def __init__(self, env, 
     automatic_model=True, layers_model = [32, 32], # In case of auto-generated model
     loading_model=False, name_model='', model=None,   # In case of loaded model (or model directly)
-    gamma=0.95, epsilon_min = 0.01, epsilon_decay = 0.995, learning_rate=1e-3,
-    memory_size=50000, batch_size=64, nb_update_target=100):
+    gamma=0.99, epsilon_min = 0.01, epsilon_decay = 0.9995, learning_rate=1e-3, tau = 1e-2,
+    use_double_dqn = True, use_soft_update=False,
+    memory_size=50000, use_PER=True, batch_size=32):
 
         # DQN Parameters
         self.gamma = gamma  # discount rate
-        self.epsilon_min = 0.01
-        self.epsilon_decay = 0.995
-        self.learning_rate = 0.001
+        self.epsilon_min = epsilon_min # Minimum Exploration
+        self.epsilon_decay = epsilon_decay # Exploration decay
+        self.learning_rate = learning_rate # learning rate of objective
+        self.tau = tau 
 
+        self.use_soft_update=use_soft_update
+        self.use_double_dqn = use_double_dqn
+        self.use_PER = use_PER
         # Global Parameters
         self.env= env
         self.state_size = env.observation_space.shape[0]
         self.action_size = env.action_space.n
-        self.memory = deque(maxlen=memory_size)
+
+        if self.use_PER:
+            self.memory = PER(memory_size)
+        else:
+            self.memory = Memory(memory_size)
         self.batch_size = batch_size
-        self.nb_update_target = nb_update_target
 
         # Variables
         self.epsilon = 1.0  # exploration rate (variable)
-        self.target_update_counter = 0 # Used to count when to update target network with main network's weights
+        self.target_update_ctr = 0 # Used to count when to update target network with main network's weights
 
         # Model for DQN
         if loading_model: # Load Existing Model
@@ -44,78 +53,146 @@ class DQN_Agent:
         else: # Or directly in input
             assert model is not None, 'No model set in input'
             self.model = model
-
         # Generate target
         self.target_model=tf.keras.models.clone_model(self.model)
         self.target_model.set_weights(self.model.get_weights()) 
+
+        # Use Session for training/test
+        self.session = Session(self, self.env)
 
         
     def _build_model(self, layers_model):
         # Neural Net for Deep-Q learning Model
         model = Sequential()
-        model.add(Dense(layers_model[0], activation='relu', input_shape=env.observation_space.shape))
-        model.add(BatchNormalization())
+        model.add(Dense(layers_model[0], activation='relu', input_shape=self.env.observation_space.shape))
         for layer in layers_model[1:]:
-            model.add(Dense(layer, activation='relu'))
             model.add(BatchNormalization())
-        model.add(Dense(env.action_space.n, activation='linear'))
+            model.add(Dense(layer, activation='relu'))
+        model.add(Dense(self.env.action_space.n, activation='linear'))
         model.compile(loss="mse", 
                       optimizer=Adam(lr=self.learning_rate), metrics=['accuracy'])
         return model
 
-    def memorize(self, transition):
-        self.memory.append(transition)
+    def memorize(self, experience):
+        state = experience[0]
+        action = experience[1]
+        reward = experience[2]
+        next_state = experience[3] 
+        done = experience[4]
+
+        #Clip of reward
+        reward=np.clip(reward, -1, 1)
+
+        Q_model = self.model.predict(np.array([state]))[0]
+        Q_next_target = self.target_model.predict(np.array([next_state]))[0] #Target model
+        old_Q = np.copy(Q_model)
+
+        ### Adapt Q_model depending of reward of next state
+        if done:
+            Q_model[action] = reward
+        else:
+            Q_model[action] = reward + self.gamma * max(Q_next_target)   
+        error = sum(pow(Q_model - old_Q, 2))/len(Q_model) 
+
+        if not self.use_PER:
+            self.memory.add(experience)
+        else: 
+            self.memory.add(experience, error)
+        return error
 
     # Trains main network every step during episode
-    def train(self):
+    def fit(self):
 
         # Start training only if certain number of samples is already saved
         if len(self.memory) < self.batch_size:
             return
 
-        # Get a minibatch of random samples from memory replay table
-        minibatch = random.sample(self.memory, self.batch_size)
+        if self.use_PER:   
+            mini_batch, idx_memory = self.memory.sample(self.batch_size)
+        else:
+            mini_batch = self.memory.sample(self.batch_size)
 
-        # Get current states from minibatch, then query NN model for Q values
-        current_states = np.array([transition[0] for transition in minibatch])
-        current_qs_list = self.model.predict(current_states)
+        if self.use_double_dqn:
+            states, Q_model, errors =self.Double_DQN_update(mini_batch)
+        else:
+            states, Q_model, errors =self.DQN_update(mini_batch)
+        self.model.fit(states, Q_model, batch_size=self.batch_size,epochs=1, verbose=0)
 
-        # Get future states from minibatch, then query NN model for Q values
-        # When using target network, query it, otherwise main network should be queried
-        new_current_states = np.array([transition[3] for transition in minibatch])
-        future_qs_list = self.target_model.predict(new_current_states)
+        if self.use_PER:
+            # update priority
+            for i in range(self.batch_size):
+                self.memory.update(idx_memory[i], errors[i])
 
-        # Now we need to enumerate our batches
-        state_batch, Q_value_batch = [], []
-        for index, (current_state, action, reward, new_current_state, done) in enumerate(minibatch):
-
-            # If not a terminal state, get new q from future states, otherwise set it to 0
-            # almost like with Q Learning, but we use just part of equation here
-            if not done:
-                max_future_q = np.max(future_qs_list[index])
-                new_q = reward + self.gamma * max_future_q
-            else:
-                new_q = reward
-
-            # Update Q value for given state
-            current_qs = current_qs_list[index]
-            current_qs[action] = new_q
-            # And append to our training data
-            state_batch.append(current_state)
-            Q_value_batch.append(current_qs)
-
-        # Fit on all samples as one batch, log only on terminal state
-        self.model.fit(np.array(state_batch), np.array(Q_value_batch), batch_size=self.batch_size, verbose=0, shuffle=False,)
-        
-        # If counter reaches set value, update target network with weights of main network
-        self.target_update_counter +=1
-        if self.target_update_counter >= self.nb_update_target:
-            self.target_model.set_weights(self.model.get_weights())
-            self.target_update_counter = 0
-            print('Target updated')
-
+        # Update Target from Model Parameters
+        self.update_target()
         # Update Exploration epsilon number
         self.epsilon = max(self.epsilon*self.epsilon_decay, self.epsilon_min) 
+    
+    def DQN_update(self, mini_batch):
+        states = np.array([experience[0] for experience in mini_batch])
+        action = np.array([experience[1] for experience in mini_batch])
+        reward = np.array([experience[2] for experience in mini_batch])
+        next_states = np.array([experience[3] for experience in mini_batch])
+        done = np.array([experience[4] for experience in mini_batch])
+        errors = np.zeros(len(mini_batch))
+
+        #Clip of reward
+        reward=np.clip(reward, -1, 1)
+
+        Q_model = self.model.predict(states)
+        Q_next_target = self.target_model.predict(next_states) #Target model
+        old_Q = np.copy(Q_model)
+
+        ### Adapt Q_model depending of reward of next state
+        for i in range(self.batch_size):
+            if done[i]:
+                Q_model[i][action[i]] = reward[i]
+            else:
+                Q_model[i][action[i]] = reward[i] + self.gamma * max(Q_next_target[i])
+            
+            # Error is MSE error (but only change on 1 with DQN)
+            errors[i] = sum(pow(Q_model[i] - old_Q[i], 2))/len(Q_model[i])
+        return (states, Q_model, errors)
+
+    
+    def Double_DQN_update(self, mini_batch):
+        states = np.array([transition[0] for transition in mini_batch])
+        action = np.array([transition[1] for transition in mini_batch])
+        reward = np.array([transition[2] for transition in mini_batch])
+        next_states = np.array([transition[3] for transition in mini_batch])
+        done = np.array([transition[4] for transition in mini_batch])
+        errors = np.zeros(len(mini_batch))
+
+        #Clip of reward
+        reward=np.clip(reward, -1, 1)
+
+        Q_model = self.model.predict(states)
+        Q_next_model = self.model.predict(next_states) #DQN
+        Q_next_target = self.target_model.predict(next_states) #Target model
+        old_Q = np.copy(Q_model)
+        ### Adapt Q_model depending of reward of next state
+        for i in range(self.batch_size):
+            if done[i]:
+                Q_model[i][action[i]] = reward[i]
+            else:
+                a = np.argmax(Q_next_model[i])
+                Q_model[i][action[i]] = reward[i] + self.gamma * (Q_next_target[i][a])
+
+            # Error is MSE error (but only change on 1 with DQN)
+            errors[i] = sum(pow(Q_model[i] - old_Q[i], 2))/len(Q_model[i])
+
+        return (states, Q_model, errors)
+
+    def update_target(self):
+        if self.use_soft_update:
+            for t, m in zip(self.target_model.trainable_variables, 
+                            self.model.trainable_variables):
+                            t.assign(t * (1 - self.tau) + m * self.tau)
+        else: #Hard update
+            self.target_update_ctr+=1
+            if self.target_update_ctr%int(1/self.tau)==0:
+                self.target_model.set_weights(self.model.get_weights()) 
+                self.target_update_ctr=0
 
     # Queries main network for Q values given current observation space (environment state)
     def get_qs(self, state):
@@ -133,94 +210,49 @@ class DQN_Agent:
             # Get random action
             return self.env.action_space.sample()
 
+    
+    def train(self, nb_steps=1e4, delta_save=0, verbose=0, name_model = 'test'):
+        self.session.train(nb_steps=nb_steps, delta_save=delta_save, verbose=verbose, name_model=name_model)
+
+    def test(self, nb_test=1):
+        self.session.train(nb_test)
+
+    def save_weights(self, filepath, overwrite=False):
+        save_model(self.model, filepath, overwrite=overwrite)
+
+
 if __name__ == '__main__':
     import os, sys, time
     import matplotlib.pyplot as plt
 
-    ### Use of GPU ?
-    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    flag_use_GPU = True
-    os.environ["CUDA_VISIBLE_DEVICES"]=["-1", "0"][flag_use_GPU]
-    sys.path.append(os.getcwd())
-
-    ### LIBRARIES
-    from library.Environment import Environment
-    from library.Network import NetworkGenerator
-    from library.Agent import Displayer
+    # ### Use of GPU ?
+    # os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
+    # flag_use_GPU = True
+    # os.environ["CUDA_VISIBLE_DEVICES"]=["-1", "0"][flag_use_GPU]
 
     # Environment settings
     MODEL_NAME = 'CartePole'    
 
-    ### TRAINING/EXPLORATION
-    EPISODES = 2000
-    # EPSILON_DECAY = pow(MIN_EPSILON, 1/(NB_MAX_EXPLORATION)) 
-
     # Display Results
-    SHOW_PREVIEW = False
-    DELTA_SAVE = 500  # episodes
     verbose = 1
 
     ### INITIALIZATION
     env = Environment("gym", 'CartPole-v0')
     env = env.getEnv()
-    Disp = Displayer(delta_display=10) # Used to display performances
     
-    flag_load_model = False
-    path_best_Model = 'models/.model'
+    USE_SOFT_UPDATE=False
+    USE_DOUBLE_DQN=True
+    USE_PER=True
 
+    flag_load_model = True
+    path_best_Model = 'models/Best_Models/best_model.model'
     if flag_load_model:
-        agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model)
+        agent = DQN_Agent(env, loading_model=True, use_soft_update=USE_SOFT_UPDATE, use_double_dqn=USE_DOUBLE_DQN, use_PER=USE_PER, name_model=path_best_Model)
     else:
-        agent = DQN_Agent(env, layers_model=[32,32])
+        agent = DQN_Agent(env, layers_model=[24,24],use_soft_update=USE_SOFT_UPDATE, use_double_dqn=USE_DOUBLE_DQN, use_PER=USE_PER)
     
-    # LOOP Episode
-    ep_rewards=[]
-    # for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
-    for episode in range(1, EPISODES + 1):
-        # Restarting episode - Environment
-        episode_reward = 0
-        state = env.reset()
-        done = False
-        
-        # LOOP Step
-        while not done:       
-
-            # Determine action to do     
-            action = agent.get_action_training(state)
-            new_state, reward, done, _ = env.step(action)
-            transition = (state, action, reward, new_state, done)
-            episode_reward += reward
-            state = new_state
-
-            if SHOW_PREVIEW:
-                env.render()
-                
-            # Every step we update replay memory and train main network
-            agent.memorize(transition)
-            if done:
-                # print the score and break out of the loop
-                print("episode: {}/{}, score: {}"
-                      .format(episode, EPISODES, episode_reward))
-        # END Episode   
-        agent.train()
-        ep_rewards.append(episode_reward)    
-
-        # SAVE MODEL
-        if not episode % DELTA_SAVE: # and min_reward >= MIN_REWARD:
-            # agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
-            avg_reward = sum(ep_rewards[-DELTA_SAVE:])/len(ep_rewards[-DELTA_SAVE:])
-            min_reward = min(ep_rewards[-DELTA_SAVE:])
-            max_reward = max(ep_rewards[-DELTA_SAVE:])
-            agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{avg_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
-        
-        # DISPLAY HISTORIC
-        if verbose==1:
-            Disp.display_historic(agent.epsilon, episode_reward) 
-    
-    ### END OF EPISODES/TRAINING
-    env.close()
-    np.save('historic_reward', ep_rewards)
-
-    # END OF DISPLAY
-    plt.ioff(), plt.show()
+    ### TRAINING/EXPLORATION
+    STEPS_MAX = 1e4
+    DELTA_SAVE = 0 
+    agent.train(nb_steps=STEPS_MAX,delta_save=DELTA_SAVE, verbose=verbose, name_model = path_best_Model)
     

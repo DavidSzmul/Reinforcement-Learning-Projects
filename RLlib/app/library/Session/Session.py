@@ -1,60 +1,65 @@
-import os, sys
-sys.path.append(os.getcwd()) #### TODEBUG
-from library.Agent import Displayer
+import numpy as np
+from library.Agent import Displayer, DQN_Agent
+from library.Environment import Environment
+import matplotlib.pyplot as plt
+
+
 class Session(object):
 
-    def __init__(self, env, agent):
-        self.env = env
+    def __init__(self, agent, env):
         self.agent = agent
+        self.env = env
 
-    def train(self, nb_episode=1, delta_save=None, verbose=0, name_model = 'test'):
-        Disp = Displayer(delta_display=10) # Used to display performances
+    def train(self, nb_steps=1e4, nb_steps_varmup=100, delta_train=1, delta_save=0, delta_display=1, verbose=0, name_model = 'test'):
+        Disp = Displayer(delta_display=delta_display) # Used to display performances
 
         # LOOP Episode
-        ep_rewards=[]
-        # for episode in tqdm(range(1, EPISODES + 1), ascii=True, unit='episodes'):
-        for episode in range(1, nb_episode + 1):
+        step=0
+        episode=0
+        while step<=nb_steps:
+            episode+=1
+
             # Restarting episode - Environment
             episode_reward = 0
-            state = env.reset()
+            episode_loss = 0
+            state = self.env.reset()
             done = False
             
             # LOOP Step
             while not done:       
-
+                step+=1
                 # Determine action to do     
-                action = agent.get_action_training(state)
-                new_state, reward, done, _ = env.step(action)
+                action = self.agent.get_action_training(state)
+                new_state, reward, done, _ = self.env.step(action)
                 transition = (state, action, reward, new_state, done)
-                episode_reward += reward
                 state = new_state
-                agent.memorize(transition)
+                loss = self.agent.memorize(transition)
+
+                episode_reward += reward
+                episode_loss += loss
+
+                if step>nb_steps_varmup and step%delta_train==0:
+                    self.agent.fit()
                 if done:
                     # print the score and break out of the loop
-                    print("episode: {}/{}, score: {}"
-                        .format(episode, nb_episode, episode_reward))
-            # END Episode   
-            agent.train()
-            ep_rewards.append(episode_reward)    
-
-            # SAVE MODEL
-            if delta_save is not None and not episode % delta_save: # and min_reward >= MIN_REWARD:
-                # agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=epsilon)
-                avg_reward = sum(ep_rewards[-delta_save:])/len(ep_rewards[-delta_save:])
-                min_reward = min(ep_rewards[-delta_save:])
-                max_reward = max(ep_rewards[-delta_save:])
-                agent.model.save(f'models/{name_model}__{max_reward:_>7.2f}max_{avg_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                    print("episode: {}, Prc_training:, {:.2f}%, score: {}"
+                        .format(episode, step/nb_steps*100, episode_reward))
             
+            # END Episode   
             # DISPLAY HISTORIC
             if verbose==1:
-                Disp.display_historic(agent.epsilon, episode_reward) 
-        
-        ### END OF EPISODES/TRAINING
-        env.close()
-        np.save('historic_reward', ep_rewards)
+                Disp.display_historic(self.agent.epsilon, episode_reward, episode_loss) 
 
+            # SAVE MODEL
+            if delta_save>0 and not step % delta_save: # and min_reward >= MIN_REWARD:
+                self.agent.save_weights(name_model)
+            
+        ### END OF EPISODES/TRAINING
+        self.env.close()
+        # np.save('historic_reward', ep_rewards)
+        self.agent.save_weights(name_model)
         # END OF DISPLAY
-        plt.ioff(), plt.show()
+        # plt.ioff(), plt.show()
 
     def test(self, nb_test=1):
 
@@ -76,24 +81,19 @@ if __name__ == '__main__':
     import os, sys, time
     import matplotlib.pyplot as plt
 
-    ### Use of GPU ?
-    os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
-    flag_use_GPU = True
-    os.environ["CUDA_VISIBLE_DEVICES"]=["-1", "0"][flag_use_GPU]
-    sys.path.append(os.getcwd())
-
     ### LIBRARIES
     from library.Environment import Environment
-    from library.Agent import DQN_Agent, Displayer
+    from library.Agent import DQN_Agent
 
     ### INITIALIZATION
     env = Environment("gym", 'CartPole-v0')
     env = env.getEnv()    
-    path_best_Model = 'models\Best_Models\DQN_Cartepole_BestModel.model'
-    agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model)
+    # path_best_Model = 'models/Best_Models/DDQN_PER_Cartepole.model'
+    # agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model)
+    agent = DQN_Agent(env, layers_model=[32, 32], use_PER=False, use_double_dqn=True)
     session = Session(env, agent)
 
     ### TRAIN
-    session.train(nb_episode=200, verbose=1, name_model='CartePole')
+    session.train(nb_episode=1000, verbose=1, name_model='CartePole_DDQN', delta_save=100)
     ### TEST
     # session.test(nb_test=2)

@@ -1,12 +1,14 @@
 import numpy as np
-from library.Agent import Displayer, DQN_Agent
-from library.Environment import Environment
 import matplotlib.pyplot as plt
 
+from app.library.Agent import Displayer, DQN_Agent
+from app.library.Environment import Environment
 
 class Session(object):
 
-    def __init__(self, agent, env):
+    def __init__(self, agent=None, env=None):
+        if agent is None or env is None:
+            raise ValueError('Agent and Environment have to be defined')
         self.agent = agent
         self.env = env
 
@@ -91,9 +93,9 @@ if __name__ == '__main__':
     # path_best_Model = 'models/Best_Models/DDQN_PER_Cartepole.model'
     # agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model)
     agent = DQN_Agent(env, layers_model=[32, 32], use_PER=False, use_double_dqn=True)
-    session = Session(env, agent)
+    session = Session(agent=agent, env=env)
 
     ### TRAIN
-    session.train(nb_episode=1000, verbose=1, name_model='CartePole_DDQN', delta_save=100)
+    session.train(nb_steps=10000, verbose=1, name_model='CartePole_DDQN', delta_save=100)
     ### TEST
     # session.test(nb_test=2)

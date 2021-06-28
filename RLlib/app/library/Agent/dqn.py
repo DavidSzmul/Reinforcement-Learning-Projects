@@ -6,9 +6,8 @@ import keras
 from keras.models import Sequential, load_model, save_model
 from keras.layers import Dense, BatchNormalization
 from keras.optimizers import Adam
-from library.Memory import Memory, PER
-from library.Environment import Environment
-from library.Session import Session
+from app.library.Memory import Memory, PER
+from app.library.Environment import Environment
 
 class DQN_Agent:
     def __init__(self, env, 
@@ -56,9 +55,6 @@ class DQN_Agent:
         # Generate target
         self.target_model=tf.keras.models.clone_model(self.model)
         self.target_model.set_weights(self.model.get_weights()) 
-
-        # Use Session for training/test
-        self.session = Session(self, self.env)
 
         
     def _build_model(self, layers_model):

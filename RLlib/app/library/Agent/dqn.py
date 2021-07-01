@@ -62,7 +62,7 @@ class DQN_Agent:
         model = Sequential()
         model.add(Dense(layers_model[0], activation='relu', input_shape=self.env.observation_space.shape))
         for layer in layers_model[1:]:
-            model.add(BatchNormalization())
+            # model.add(BatchNormalization()) # Is it source of divergence using TD error ?
             model.add(Dense(layer, activation='relu'))
         model.add(Dense(self.env.action_space.n, activation='linear'))
         model.compile(loss="mse", 
@@ -112,7 +112,7 @@ class DQN_Agent:
             states, Q_model, errors =self.Double_DQN_update(mini_batch)
         else:
             states, Q_model, errors =self.DQN_update(mini_batch)
-        self.model.fit(states, Q_model, batch_size=self.batch_size,epochs=1, verbose=0)
+        self.model.fit(states, Q_model, batch_size=self.batch_size, epochs=1, verbose=0)
 
         if self.use_PER:
             # update priority
@@ -133,11 +133,16 @@ class DQN_Agent:
         errors = np.zeros(len(mini_batch))
 
         #Clip of reward
-        reward=np.clip(reward, -1, 1)
-
+        epsilon_err = 1e-4 # To avoid divergence due to precision of float
+        reward=np.clip(reward, -1+epsilon_err, 1-epsilon_err)
+        
         Q_model = self.model.predict(states)
         Q_next_target = self.target_model.predict(next_states) #Target model
         old_Q = np.copy(Q_model)
+
+        #DEBUG
+        if np.any(Q_model > 1/(1-self.gamma)):
+            print('DEBUG: Q value is diverging')
 
         ### Adapt Q_model depending of reward of next state
         for i in range(self.batch_size):
@@ -160,9 +165,14 @@ class DQN_Agent:
         errors = np.zeros(len(mini_batch))
 
         #Clip of reward
-        reward=np.clip(reward, -1, 1)
+        epsilon_err = 1e-4 # To avoid divergence due to precision of float
+        reward=np.clip(reward, -1+epsilon_err, 1-epsilon_err)
 
         Q_model = self.model.predict(states)
+        #DEBUG
+        if np.any(Q_model > 1/(1-self.gamma)):
+            print('DEBUG: Q value is diverging')
+
         Q_next_model = self.model.predict(next_states) #DQN
         Q_next_target = self.target_model.predict(next_states) #Target model
         old_Q = np.copy(Q_model)
@@ -205,13 +215,6 @@ class DQN_Agent:
         else:
             # Get random action
             return self.env.action_space.sample()
-
-    
-    def train(self, nb_steps=1e4, delta_save=0, verbose=0, name_model = 'test'):
-        self.session.train(nb_steps=nb_steps, delta_save=delta_save, verbose=verbose, name_model=name_model)
-
-    def test(self, nb_test=1):
-        self.session.train(nb_test)
 
     def save_weights(self, filepath, overwrite=False):
         save_model(self.model, filepath, overwrite=overwrite)

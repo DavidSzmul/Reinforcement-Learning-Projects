@@ -54,12 +54,12 @@ class Session(object):
 
             # SAVE MODEL
             if delta_save>0 and not step % delta_save: # and min_reward >= MIN_REWARD:
-                self.agent.save_weights(name_model)
+                self.agent.save_weights(name_model, overwrite=True)
             
         ### END OF EPISODES/TRAINING
         self.env.close()
         # np.save('historic_reward', ep_rewards)
-        self.agent.save_weights(name_model)
+        self.agent.save_weights(name_model,overwrite=True)
         # END OF DISPLAY
         # plt.ioff(), plt.show()
 
@@ -90,12 +90,19 @@ if __name__ == '__main__':
     ### INITIALIZATION
     env = Environment("gym", 'CartPole-v0')
     env = env.getEnv()    
-    # path_best_Model = 'models/Best_Models/DDQN_PER_Cartepole.model'
-    # agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model)
-    agent = DQN_Agent(env, layers_model=[32, 32], use_PER=False, use_double_dqn=True)
+    path_best_Model = 'CartePole_DDQN'
+
+    USE_PER = True
+    USE_DOUBLE_DQN = True
+    USE_SOFT_SUPDATE = True
+
+    agent = DQN_Agent(env, loading_model=True, name_model=path_best_Model, 
+                        use_PER=USE_PER, use_double_dqn=USE_DOUBLE_DQN, use_soft_update=USE_SOFT_SUPDATE)
+    # agent = DQN_Agent(env, layers_model=[16, 16], use_PER=USE_PER, use_double_dqn=USE_DOUBLE_DQN, use_soft_update=USE_SOFT_SUPDATE)
     session = Session(agent=agent, env=env)
 
     ### TRAIN
-    session.train(nb_steps=10000, verbose=1, name_model='CartePole_DDQN', delta_save=100)
+    session.train(nb_steps=1e4, verbose=1, name_model='CartePole_DDQN', delta_save=100)
     ### TEST
-    # session.test(nb_test=2)
+    # print('Finished')
+    # session.test(nb_test=2)s
